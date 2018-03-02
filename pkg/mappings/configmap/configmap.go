@@ -64,8 +64,7 @@ func (ms *MapStore) loadConfigMapUnsafe() error {
 	ms.parseMap(cm.Data)
 
 	watcher, err := ms.configMap.Watch(metav1.ListOptions{
-		Watch:           true,
-		ResourceVersion: cm.ResourceVersion,
+		Watch: true,
 	})
 
 	if err != nil {
@@ -75,13 +74,19 @@ func (ms *MapStore) loadConfigMapUnsafe() error {
 
 	go func() {
 		watcher := watcher
-		resourceVersion := cm.ResourceVersion
 		var err error
 		for {
 			for r := range watcher.ResultChan() {
 				switch r.Type {
+				case watch.Error:
+					logrus.WithFields(logrus.Fields{"error": r}).Error("recieved a watch error")
 				case watch.Deleted:
-					break
+					ms.mutex.Lock()
+					logrus.Info("Resetting configmap on delete")
+					ms.users = make(map[string]config.UserMapping)
+					ms.roles = make(map[string]config.RoleMapping)
+					ms.awsAccounts = make(map[string]interface{})
+					ms.mutex.Unlock()
 				case watch.Added:
 					fallthrough
 				case watch.Modified:
@@ -104,15 +109,13 @@ func (ms *MapStore) loadConfigMapUnsafe() error {
 						if err != nil {
 							logrus.Error(err)
 						}
-						resourceVersion = resourceVersion
 					}
 
 				}
 			}
 			logrus.Error("Watch channel closed.")
 			watcher, err = ms.configMap.Watch(metav1.ListOptions{
-				Watch:           true,
-				ResourceVersion: resourceVersion,
+				Watch: true,
 			})
 			if err != nil {
 				logrus.Warn("Unable to re-establish watch.  Sleeping for 5 seconds")

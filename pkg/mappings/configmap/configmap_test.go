@@ -28,6 +28,7 @@ func makeStore() MapStore {
 	ms.users["matt"] = testUser
 	ms.roles["instance"] = testRole
 	ms.awsAccounts["123"] = nil
+	ms.initialized = true
 	return ms
 }
 
