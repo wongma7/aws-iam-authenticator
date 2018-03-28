@@ -158,7 +158,7 @@ func TestLoadConfigMap(t *testing.T) {
 			data := make(map[string]string)
 			data["mapUsers"] = userMapping
 			data["mapRoles"] = roleMapping
-			data["autoMappedAWSAccounts"] = autoMappedAWSAccountsYAML
+			data["mapAccounts"] = autoMappedAWSAccountsYAML
 			return true, &core_v1.ConfigMap{
 				Data: data,
 			}, nil
@@ -200,7 +200,7 @@ func TestLoadConfigMap(t *testing.T) {
 	updateData := make(map[string]string)
 	updateData["mapUsers"] = updatedUserMapping
 	updateData["mapRoles"] = updatedRoleMapping
-	updateData["autoMappedAWSAccounts"] = updatedAWSAccountsYAML
+	updateData["mapAccounts"] = updatedAWSAccountsYAML
 	meta := metav1.ObjectMeta{Name: "aws-auth"}
 	watcher.Modify(&core_v1.ConfigMap{ObjectMeta: meta, Data: updateData})
 

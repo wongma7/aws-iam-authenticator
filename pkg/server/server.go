@@ -433,6 +433,10 @@ func (h *handler) doMapping(identity *token.Identity) (string, []string, error) 
 	if _, exists := h.accountMap[identity.AccountID]; exists {
 		return identity.CanonicalARN, []string{}, nil
 	}
+
+	if h.configMap != nil && h.configMap.AWSAccount(identity.AccountID) {
+		return identity.CanonicalARN, []string{}, nil
+	}
 	return "", nil, fmt.Errorf("ARN is not mapped: %s (lowercased from %s)", arnLower, identity.CanonicalARN)
 }
 

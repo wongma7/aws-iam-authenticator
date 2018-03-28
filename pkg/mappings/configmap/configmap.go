@@ -158,7 +158,7 @@ func (ms *MapStore) parseMap(m map[string]string) error {
 	}
 
 	awsAccounts := make([]string, 0)
-	if accountsData, ok := m["autoMappedAWSAccounts"]; ok {
+	if accountsData, ok := m["mapAccounts"]; ok {
 		err := yaml.Unmarshal([]byte(accountsData), &awsAccounts)
 		if err != nil {
 			errs = append(errs, err)
