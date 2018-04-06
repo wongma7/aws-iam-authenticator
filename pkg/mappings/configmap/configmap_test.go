@@ -9,7 +9,6 @@ import (
 	"github.com/heptio/authenticator/pkg/config"
 	core_v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/kubernetes/typed/core/v1/fake"
@@ -28,7 +27,6 @@ func makeStore() MapStore {
 	ms.users["matt"] = testUser
 	ms.roles["instance"] = testRole
 	ms.awsAccounts["123"] = nil
-	ms.initialized = true
 	return ms
 }
 
@@ -46,7 +44,6 @@ func makeStoreWClient() (MapStore, *fake.FakeConfigMaps) {
 
 func TestUserMapping(t *testing.T) {
 	ms := makeStore()
-	ms.initialized = true
 	user, err := ms.UserMapping("matt")
 	if err != nil {
 		t.Errorf("Could not find user 'matt' in map")
@@ -66,7 +63,6 @@ func TestUserMapping(t *testing.T) {
 
 func TestRoleMapping(t *testing.T) {
 	ms := makeStore()
-	ms.initialized = true
 	role, err := ms.RoleMapping("instance")
 	if err != nil {
 		t.Errorf("Could not find user 'instance in map")
@@ -86,7 +82,6 @@ func TestRoleMapping(t *testing.T) {
 
 func TestAWSAccount(t *testing.T) {
 	ms := makeStore()
-	ms.initialized = true
 	if !ms.AWSAccount("123") {
 		t.Errorf("Expected aws account '123' to be in accounts list: %v", ms.awsAccounts)
 	}
@@ -153,27 +148,28 @@ var updatedAWSAccountsYAML = `
 
 func TestLoadConfigMap(t *testing.T) {
 	ms, fakeConfigMaps := makeStoreWClient()
-	fakeConfigMaps.Fake.Fake.AddReactor("get", "configmaps",
-		func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
-			data := make(map[string]string)
-			data["mapUsers"] = userMapping
-			data["mapRoles"] = roleMapping
-			data["mapAccounts"] = autoMappedAWSAccountsYAML
-			return true, &core_v1.ConfigMap{
-				Data: data,
-			}, nil
-		})
 
 	var watcher *watch.FakeWatcher
+
 	fakeConfigMaps.Fake.Fake.AddWatchReactor("configmaps",
 		func(action k8stesting.Action) (handled bool, ret watch.Interface, err error) {
 			watcher = watch.NewFake()
 			return true, watcher, nil
 		})
-	err := ms.loadConfigMapUnsafe()
-	if err != nil {
-		t.Errorf("Failed to load configMap: %v", err)
-	}
+
+	ms.startLoadConfigMap()
+
+	time.Sleep(2 * time.Millisecond)
+
+	meta := metav1.ObjectMeta{Name: "aws-auth"}
+	data := make(map[string]string)
+	data["mapUsers"] = userMapping
+	data["mapRoles"] = roleMapping
+	data["mapAccounts"] = autoMappedAWSAccountsYAML
+
+	watcher.Add(&core_v1.ConfigMap{ObjectMeta: meta, Data: data})
+
+	time.Sleep(2 * time.Millisecond)
 
 	if !ms.AWSAccount("123") {
 		t.Errorf("AWS Account '123' not in allowed accounts")
@@ -201,7 +197,6 @@ func TestLoadConfigMap(t *testing.T) {
 	updateData["mapUsers"] = updatedUserMapping
 	updateData["mapRoles"] = updatedRoleMapping
 	updateData["mapAccounts"] = updatedAWSAccountsYAML
-	meta := metav1.ObjectMeta{Name: "aws-auth"}
 	watcher.Modify(&core_v1.ConfigMap{ObjectMeta: meta, Data: updateData})
 
 	//TODO: Sync without using sleep

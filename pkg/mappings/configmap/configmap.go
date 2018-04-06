@@ -28,7 +28,6 @@ type MapStore struct {
 	// Used as set.
 	awsAccounts map[string]interface{}
 	configMap   v1.ConfigMapInterface
-	initialized bool
 }
 
 func New(masterURL, kubeConfig string) (*MapStore, error) {
@@ -44,52 +43,34 @@ func New(masterURL, kubeConfig string) (*MapStore, error) {
 	ms := MapStore{}
 	// TODO: Should we use a namespace?  Make it configurable?
 	ms.configMap = clientset.CoreV1().ConfigMaps(core_v1.NamespaceDefault)
-	err = ms.loadConfigMapUnsafe()
-	// TODO: Handle error
-	if err != nil {
-		logrus.Warnf("Could not load config map at startup.  Will try again on first request. error: %+v", err)
-	}
+	ms.startLoadConfigMap()
 	return &ms, nil
 }
 
-// Acquire lock before calling
-func (ms *MapStore) loadConfigMapUnsafe() error {
-	// TODO: convert to single config map instead of each group of values being its own map.
-	cm, err := ms.configMap.Get("aws-auth", metav1.GetOptions{})
-	if err != nil {
-		logrus.Warnf("Could not get config map: %v", err)
-		return err
-	}
-
-	ms.parseMap(cm.Data)
-
-	watcher, err := ms.configMap.Watch(metav1.ListOptions{
-		Watch: true,
-	})
-
-	if err != nil {
-		logrus.Warnf("Could not start watch on config map: %v", err)
-		return err
-	}
-
+// Starts a go routine which will watch the configmap and update the in memory data
+// when the values change.
+func (ms *MapStore) startLoadConfigMap() {
 	go func() {
-		watcher := watcher
-		var err error
 		for {
+			watcher, err := ms.configMap.Watch(metav1.ListOptions{
+				Watch: true,
+			})
+			if err != nil {
+				logrus.Warn("Unable to re-establish watch.  Sleeping for 5 seconds")
+				time.Sleep(5 * time.Second)
+				continue
+			}
 			for r := range watcher.ResultChan() {
 				switch r.Type {
 				case watch.Error:
 					logrus.WithFields(logrus.Fields{"error": r}).Error("recieved a watch error")
 				case watch.Deleted:
-					ms.mutex.Lock()
 					logrus.Info("Resetting configmap on delete")
-					ms.users = make(map[string]config.UserMapping)
-					ms.roles = make(map[string]config.RoleMapping)
-					ms.awsAccounts = make(map[string]interface{})
-					ms.mutex.Unlock()
-				case watch.Added:
-					fallthrough
-				case watch.Modified:
+					userMappings := make([]config.UserMapping, 0)
+					roleMappings := make([]config.RoleMapping, 0)
+					awsAccounts := make([]string, 0)
+					ms.saveMap(userMappings, roleMappings, awsAccounts)
+				case watch.Added, watch.Modified:
 					// Type assertion is not working
 					//
 					// cm, ok := r.Object.(*core_v1.ConfigMap)
@@ -103,9 +84,11 @@ func (ms *MapStore) loadConfigMapUnsafe() error {
 							break
 						}
 						logrus.Info("Received aws-auth watch event")
-						ms.mutex.Lock()
-						err := ms.parseMap(cm.Data)
-						ms.mutex.Unlock()
+						userMappings, roleMappings, awsAccounts, err := ms.parseMap(cm.Data)
+						if err != nil {
+							logrus.Errorf("There was an error parsing the config maps.  Only saving data that was good, %+v", err)
+						}
+						ms.saveMap(userMappings, roleMappings, awsAccounts)
 						if err != nil {
 							logrus.Error(err)
 						}
@@ -114,19 +97,8 @@ func (ms *MapStore) loadConfigMapUnsafe() error {
 				}
 			}
 			logrus.Error("Watch channel closed.")
-			watcher, err = ms.configMap.Watch(metav1.ListOptions{
-				Watch: true,
-			})
-			if err != nil {
-				logrus.Warn("Unable to re-establish watch.  Sleeping for 5 seconds")
-				time.Sleep(5 * time.Second)
-			}
 		}
 	}()
-
-	ms.initialized = true
-
-	return nil
 }
 
 type ErrParsingMap struct {
@@ -138,7 +110,7 @@ func (err ErrParsingMap) Error() string {
 }
 
 // Acquire lock before calling
-func (ms *MapStore) parseMap(m map[string]string) error {
+func (ms *MapStore) parseMap(m map[string]string) ([]config.UserMapping, []config.RoleMapping, []string, error) {
 	// TODO: Look at errors.Wrap().
 	errs := make([]error, 0)
 	userMappings := make([]config.UserMapping, 0)
@@ -167,11 +139,17 @@ func (ms *MapStore) parseMap(m map[string]string) error {
 
 	// TODO: Check for empty user and role mappings.
 
+	var err error
 	if len(errs) > 0 {
 		logrus.Warnf("Errors parsing configmap: %+v", errs)
-		return ErrParsingMap{errors: errs}
+		err = ErrParsingMap{errors: errs}
 	}
+	return userMappings, roleMappings, awsAccounts, err
+}
 
+func (ms *MapStore) saveMap(userMappings []config.UserMapping, roleMappings []config.RoleMapping, awsAccounts []string) {
+	ms.mutex.Lock()
+	defer ms.mutex.Unlock()
 	ms.users = make(map[string]config.UserMapping)
 	ms.roles = make(map[string]config.RoleMapping)
 	ms.awsAccounts = make(map[string]interface{})
@@ -185,7 +163,6 @@ func (ms *MapStore) parseMap(m map[string]string) error {
 	for _, awsAccount := range awsAccounts {
 		ms.awsAccounts[awsAccount] = nil
 	}
-	return nil
 }
 
 // UserNotFound is the error returned when the user is not found in the config map.
@@ -195,15 +172,8 @@ var UserNotFound = errors.New("User not found in configmap")
 var RoleNotFound = errors.New("Role not found in configmap")
 
 func (ms *MapStore) UserMapping(arn string) (config.UserMapping, error) {
-	ms.mutex.Lock()
-	defer ms.mutex.Unlock()
-	if !ms.initialized {
-		err := ms.loadConfigMapUnsafe()
-		if err != nil {
-			// TODO: Log failed to load config map
-			return config.UserMapping{}, UserNotFound
-		}
-	}
+	ms.mutex.RLock()
+	defer ms.mutex.RUnlock()
 	if user, ok := ms.users[arn]; !ok {
 		return config.UserMapping{}, UserNotFound
 	} else {
@@ -212,15 +182,8 @@ func (ms *MapStore) UserMapping(arn string) (config.UserMapping, error) {
 }
 
 func (ms *MapStore) RoleMapping(arn string) (config.RoleMapping, error) {
-	ms.mutex.Lock()
-	defer ms.mutex.Unlock()
-	if !ms.initialized {
-		err := ms.loadConfigMapUnsafe()
-		if err != nil {
-			// TODO: Log failed to load config map
-			return config.RoleMapping{}, UserNotFound
-		}
-	}
+	ms.mutex.RLock()
+	defer ms.mutex.RUnlock()
 	if role, ok := ms.roles[arn]; !ok {
 		return config.RoleMapping{}, RoleNotFound
 	} else {
@@ -231,13 +194,6 @@ func (ms *MapStore) RoleMapping(arn string) (config.RoleMapping, error) {
 func (ms *MapStore) AWSAccount(id string) bool {
 	ms.mutex.RLock()
 	defer ms.mutex.RUnlock()
-	if !ms.initialized {
-		err := ms.loadConfigMapUnsafe()
-		if err != nil {
-			// TODO: Log failed to load config map
-			return false
-		}
-	}
 	_, ok := ms.awsAccounts[id]
 	return ok
 }
