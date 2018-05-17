@@ -179,9 +179,18 @@ func (c *Server) Run(stopCh <-chan struct{}) {
 		}
 	}
 
+	go func() {
+		http.ListenAndServe(":21363", &healthzHandler{})
+	}()
 	if err := c.httpServer.Serve(c.listener); err != nil {
 		logrus.WithError(err).Fatal("http server exited")
 	}
+}
+
+type healthzHandler struct{}
+
+func (m *healthzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "ok")
 }
 
 func (c *Server) getHandler() *handler {
@@ -232,6 +241,9 @@ func (c *Server) getHandler() *handler {
 
 	h.HandleFunc("/authenticate", h.authenticateEndpoint)
 	h.Handle("/metrics", promhttp.Handler())
+	h.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "ok")
+	})
 	return h
 }
 
