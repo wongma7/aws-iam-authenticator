@@ -1,0 +1,6 @@
+FROM alpine:latest
+RUN adduser -D -u 10000 kubernetes-aws-authenticator
+RUN apk add --update ca-certificates
+COPY _output/linux/amd64/kubernetes-aws-authenticator /
+USER kubernetes-aws-authenticator
+ENTRYPOINT ["/kubernetes-aws-authenticator"]
