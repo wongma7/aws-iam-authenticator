@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v2"
 	core_v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
@@ -42,7 +43,7 @@ func New(masterURL, kubeConfig string) (*MapStore, error) {
 
 	ms := MapStore{}
 	// TODO: Should we use a namespace?  Make it configurable?
-	ms.configMap = clientset.CoreV1().ConfigMaps(core_v1.NamespaceDefault)
+	ms.configMap = clientset.CoreV1().ConfigMaps("kube-system")
 	ms.startLoadConfigMap()
 	return &ms, nil
 }
@@ -53,7 +54,8 @@ func (ms *MapStore) startLoadConfigMap() {
 	go func() {
 		for {
 			watcher, err := ms.configMap.Watch(metav1.ListOptions{
-				Watch: true,
+				Watch:         true,
+				FieldSelector: fields.OneTermEqualSelector("metadata.name", "aws-auth").String(),
 			})
 			if err != nil {
 				logrus.Warn("Unable to re-establish watch.  Sleeping for 5 seconds")
