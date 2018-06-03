@@ -149,11 +149,10 @@ var updatedAWSAccountsYAML = `
 func TestLoadConfigMap(t *testing.T) {
 	ms, fakeConfigMaps := makeStoreWClient()
 
-	var watcher *watch.FakeWatcher
+	watcher := watch.NewFake()
 
 	fakeConfigMaps.Fake.Fake.AddWatchReactor("configmaps",
 		func(action k8stesting.Action) (handled bool, ret watch.Interface, err error) {
-			watcher = watch.NewFake()
 			return true, watcher, nil
 		})
 
